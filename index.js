@@ -91,7 +91,7 @@ async function start() {
     res.send({ success: true });
   });
 
-  app.get("/users/role/:email", async (req, res) => {
+  app.get("/user/role/:email", async (req, res) => {
     const result = await users.findOne({ email: req.params.email });
     res.send({ role: result?.role || "user" });
   });
