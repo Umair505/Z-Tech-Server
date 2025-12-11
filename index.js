@@ -266,8 +266,35 @@ async function start() {
     res.send(result);
   });
 
-  
+  // -------------------- WISHLIST --------------------
+  app.post("/wishlist", verifyToken, async (req, res) => {
+    const item = req.body;
+    item.email = req.user.email;
 
+    const exists = await wishlist.findOne({
+      email: item.email,
+      productId: item.productId
+    });
+
+    if (exists)
+      return res.status(400).send({ message: "Already in wishlist" });
+
+    await wishlist.insertOne(item);
+    res.send({ success: true });
+  });
+
+  app.get("/wishlist", verifyToken, async (req, res) => {
+    const result = await wishlist.find({ email: req.user.email }).toArray();
+    res.send(result);
+  });
+
+  app.delete("/wishlist/:id", verifyToken, async (req, res) => {
+    const result = await wishlist.deleteOne({ _id: new ObjectId(req.params.id) });
+    res.send(result);
+  });
+
+
+ 
 
     // -------------------- ROOT --------------------
     app.get("/", (req, res) => {
