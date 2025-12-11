@@ -129,6 +129,29 @@ async function start() {
       res.send(allUsers);
     });
 
+    // -------------------- USER MANAGEMENT (ADMIN) --------------------
+
+    // Make User Admin
+    app.patch("/users/admin/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: {
+          role: "admin",
+        },
+      };
+      const result = await users.updateOne(filter, updatedDoc);
+      res.send(result);
+    });
+
+    // Delete User
+    app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await users.deleteOne(query);
+      res.send(result);
+    });
+
     // -------------------- IMAGE UPLOAD (Cloudinary) --------------------
     app.post("/upload",verifyToken, verifyAdmin, upload.array("files", 10), async (req, res) => {
       try {
@@ -198,6 +221,53 @@ async function start() {
       const result = await products.deleteOne({ _id: new ObjectId(req.params.id) });
       res.send(result);
     });
+
+  // -------------------- CART --------------------
+
+     app.post("/cart", verifyToken, async (req, res) => {
+    const item = req.body;
+    item.email = req.user.email;
+    item.createdAt = new Date();
+
+    const exists = await carts.findOne({
+      email: item.email,
+      productId: item.productId
+    });
+
+    if (exists)
+      return res.status(400).send({ message: "Already added to cart" });
+
+    await carts.insertOne(item);
+    res.send({ success: true });
+  });
+
+  app.get("/cart", verifyToken, async (req, res) => {
+    const result = await carts.find({ email: req.user.email }).toArray();
+    res.send(result);
+  });
+
+  // Update Cart Quantity
+    app.patch("/cart/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const { quantity } = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: {
+          quantity: parseInt(quantity),
+        },
+      };
+      const result = await carts.updateOne(filter, updatedDoc);
+      res.send(result);
+    });
+
+
+  app.delete("/cart/:id", verifyToken, async (req, res) => {
+    const result = await carts.deleteOne({ _id: new ObjectId(req.params.id) });
+    res.send(result);
+  });
+
+  
+
 
     // -------------------- ROOT --------------------
     app.get("/", (req, res) => {
