@@ -294,7 +294,22 @@ async function start() {
   });
 
 
- 
+    // -------------------- ORDERS --------------------
+  app.post("/order", verifyToken, async (req, res) => {
+    const order = req.body;
+    order.email = req.user.email;
+    order.createdAt = new Date();
+    order.status = "pending";
+
+    const result = await orders.insertOne(order);
+    res.send(result);
+  });
+
+  app.get("/orders", verifyToken, async (req, res) => {
+    const result = await orders.find({ email: req.user.email }).toArray();
+    res.send(result);
+  });
+
 
     // -------------------- ROOT --------------------
     app.get("/", (req, res) => {
