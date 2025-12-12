@@ -11,13 +11,35 @@ const cloudinary = require("cloudinary").v2;
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// -------------------- MIDDLEWARE --------------------
+// -------------------- DEPLOYMENT CONFIG --------------------
+// আপনার ফ্রন্টএন্ড ডিপ্লয় করার পর যে লিংক পাবেন, সেটা এখানে যোগ করবেন
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "https://z-tech-gadget.vercel.app", // আপনার ফ্রন্টএন্ড লাইভ লিংক ১
+  "https://your-frontend-domain.com"  // আপনার ফ্রন্টএন্ড লাইভ লিংক ২ (যদি থাকে)
+];
+
 app.use(cors({
-  origin: ["http://localhost:3000", "http://localhost:5173","https://z-tech-gadget.vercel.app","https://z-tech-server-kappa.vercel.app"],
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true
 }));
+
 app.use(express.json());
 app.use(cookieParser());
+
+// কুকি সেটিংস (খুবই গুরুত্বপূর্ণ ডিপ্লয়মেন্টের জন্য)
+const cookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+};
 
 // -------------------- CLOUDINARY CONFIG --------------------
 cloudinary.config({
@@ -26,11 +48,10 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Multer (in-memory)
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// -------------------- JWT VERIFY --------------------
+// -------------------- JWT MIDDLEWARE --------------------
 const verifyToken = (req, res, next) => {
   const token = req.cookies?.token;
   if (!token) return res.status(401).send({ message: "Unauthorized" });
@@ -42,18 +63,19 @@ const verifyToken = (req, res, next) => {
   });
 };
 
-// -------------------- DATABASE --------------------
+// -------------------- MONGODB CONNECTION --------------------
 const client = new MongoClient(process.env.MONGODB_URI, {
   serverApi: { version: ServerApiVersion.v1, strict: true }
 });
 
-async function start() {
+async function run() {
   try {
-    await client.connect();
-    console.log("Connected to MongoDB");
+    // Vercel এ কানেকশন বার বার যাতে না হয়, তাই বাইরে কানেক্ট করা ভালো, 
+    // তবে এই প্যাটার্নটি স্ট্যান্ডার্ড:
+    // await client.connect(); 
+    // console.log("Connected to MongoDB");
 
     const db = client.db("ztechDb");
-
     const users = db.collection("users");
     const products = db.collection("products");
     const carts = db.collection("carts");
@@ -64,53 +86,32 @@ async function start() {
     const verifyAdmin = async (req, res, next) => {
       const email = req.user.email;
       const user = await users.findOne({ email });
-
       if (!user || user.role !== "admin") {
         return res.status(403).send({ message: "Admin only" });
       }
       next();
     };
 
-    // -------------------- AUTH --------------------
-    // -------------------- AUTH --------------------
-    
-    // কুকি অপশনগুলো এক জায়গায় ডিফাইন করে নিই যাতে ভুল না হয়
-    const cookieOptions = {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production", // প্রোডাকশনে true, লোকালে false
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax", // লোকালে 'lax' ভালো কাজ করে
-    };
-
+    // -------------------- AUTH ROUTES --------------------
     app.post("/jwt", (req, res) => {
       const payload = req.body;
-      const token = jwt.sign(payload, process.env.ACCESS_TOKEN_SECRET, {
-        expiresIn: "365d"
-      });
-
-      res
-        .cookie("token", token, cookieOptions)
-        .send({ success: true });
+      const token = jwt.sign(payload, process.env.ACCESS_TOKEN_SECRET, { expiresIn: "365d" });
+      res.cookie("token", token, cookieOptions).send({ success: true });
     });
 
     app.get("/logout", (req, res) => {
-      res
-        .clearCookie("token", { ...cookieOptions, maxAge: 0 })
-        .send({ success: true });
+      res.clearCookie("token", { ...cookieOptions, maxAge: 0 }).send({ success: true });
     });
 
-    // -------------------- USER --------------------
+    // -------------------- USER ROUTES --------------------
     app.post("/users", async (req, res) => {
       const user = req.body;
-
       const exists = await users.findOne({ email: user.email });
-      if (exists) {
-        return res.send({ message: "User exists" });
-      }
-
+      if (exists) return res.send({ message: "User exists" });
+      
       user.role = "user";
       user.createdAt = new Date();
       await users.insertOne(user);
-
       res.send({ success: true });
     });
 
@@ -119,78 +120,28 @@ async function start() {
       res.send({ role: result?.role || "user" });
     });
 
-    // -------------------- ADMIN GET ALL USERS --------------------
+    // Admin: Get All Users
     app.get("/admin/users", verifyToken, verifyAdmin, async (req, res) => {
-      const allUsers = await users
-        .find()
-        .sort({ createdAt: -1 })
-        .toArray();
-
+      const allUsers = await users.find().sort({ createdAt: -1 }).toArray();
       res.send(allUsers);
     });
 
-    // -------------------- USER MANAGEMENT (ADMIN) --------------------
-
-    // Make User Admin
+    // Admin: Make Admin
     app.patch("/users/admin/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const filter = { _id: new ObjectId(id) };
-      const updatedDoc = {
-        $set: {
-          role: "admin",
-        },
-      };
+      const updatedDoc = { $set: { role: "admin" } };
       const result = await users.updateOne(filter, updatedDoc);
       res.send(result);
     });
 
-    // Delete User
+    // Admin: Delete User
     app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await users.deleteOne(query);
+      const result = await users.deleteOne({ _id: new ObjectId(req.params.id) });
       res.send(result);
     });
 
-    // -------------------- IMAGE UPLOAD (Cloudinary) --------------------
-    app.post("/upload",verifyToken, verifyAdmin, upload.array("files", 10), async (req, res) => {
-      try {
-        if (!req.files || req.files.length === 0) {
-          return res.status(400).send({ error: "No files uploaded" });
-        }
-
-        const uploadPromises = req.files.map(
-          file =>
-            new Promise((resolve, reject) => {
-              const stream = cloudinary.uploader.upload_stream(
-                { folder: "ztech" },
-                (error, result) => {
-                  if (error) return reject(error);
-                  resolve(result);
-                }
-              );
-
-              streamifier.createReadStream(file.buffer).pipe(stream);
-            })
-        );
-
-        const uploaded = await Promise.all(uploadPromises);
-
-        const files = uploaded.map(file => ({
-          public_id: file.public_id,
-          url: file.secure_url,
-          width: file.width,
-          height: file.height,
-          format: file.format
-        }));
-
-        res.send({ success: true, files });
-      } catch (err) {
-        res.status(500).send({ error: "Upload Failed", details: err.message });
-      }
-    });
-
-    // -------------------- PRODUCT CRUD --------------------
+    // -------------------- PRODUCT ROUTES --------------------
     app.post("/products", verifyToken, verifyAdmin, async (req, res) => {
       const data = req.body;
       data.createdAt = new Date();
@@ -210,9 +161,10 @@ async function start() {
     });
 
     app.put("/products/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const { _id, ...updatedData } = req.body; // _id বাদ দিয়ে আপডেট করুন
       const result = await products.updateOne(
         { _id: new ObjectId(req.params.id) },
-        { $set: req.body }
+        { $set: updatedData }
       );
       res.send(result);
     });
@@ -222,111 +174,151 @@ async function start() {
       res.send(result);
     });
 
-  // -------------------- CART --------------------
-
-     app.post("/cart", verifyToken, async (req, res) => {
-    const item = req.body;
-    item.email = req.user.email;
-    item.createdAt = new Date();
-
-    const exists = await carts.findOne({
-      email: item.email,
-      productId: item.productId
+    // -------------------- UPLOAD ROUTE --------------------
+    app.post("/upload", verifyToken, verifyAdmin, upload.array("files", 10), async (req, res) => {
+      try {
+        if (!req.files || req.files.length === 0) return res.status(400).send({ error: "No files" });
+        const uploadPromises = req.files.map(file => new Promise((resolve, reject) => {
+            const stream = cloudinary.uploader.upload_stream({ folder: "ztech" }, (error, result) => {
+                if (error) reject(error);
+                else resolve(result);
+            });
+            streamifier.createReadStream(file.buffer).pipe(stream);
+        }));
+        const uploaded = await Promise.all(uploadPromises);
+        const files = uploaded.map(file => ({
+          public_id: file.public_id,
+          url: file.secure_url,
+          width: file.width,
+          height: file.height,
+          format: file.format
+        }));
+        res.send({ success: true, files });
+      } catch (err) {
+        res.status(500).send({ error: "Upload Failed" });
+      }
     });
 
-    if (exists)
-      return res.status(400).send({ message: "Already added to cart" });
-
-    await carts.insertOne(item);
-    res.send({ success: true });
-  });
-
-  app.get("/cart", verifyToken, async (req, res) => {
-    const result = await carts.find({ email: req.user.email }).toArray();
-    res.send(result);
-  });
-
-  // Update Cart Quantity
-    app.patch("/cart/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const { quantity } = req.body;
-      const filter = { _id: new ObjectId(id) };
-      const updatedDoc = {
-        $set: {
-          quantity: parseInt(quantity),
-        },
-      };
-      const result = await carts.updateOne(filter, updatedDoc);
+    // -------------------- CART & WISHLIST --------------------
+    app.post("/cart", verifyToken, async (req, res) => {
+      const item = req.body;
+      const exists = await carts.findOne({ email: req.user.email, productId: item.productId });
+      if (exists) return res.status(400).send({ message: "Already in cart" });
+      
+      item.email = req.user.email; // Ensure email from token
+      const result = await carts.insertOne(item);
       res.send(result);
     });
 
-
-  app.delete("/cart/:id", verifyToken, async (req, res) => {
-    const result = await carts.deleteOne({ _id: new ObjectId(req.params.id) });
-    res.send(result);
-  });
-
-  // -------------------- WISHLIST --------------------
-  app.post("/wishlist", verifyToken, async (req, res) => {
-    const item = req.body;
-    item.email = req.user.email;
-
-    const exists = await wishlist.findOne({
-      email: item.email,
-      productId: item.productId
+    app.get("/cart", verifyToken, async (req, res) => {
+      const result = await carts.find({ email: req.user.email }).toArray();
+      res.send(result);
     });
 
-    if (exists)
-      return res.status(400).send({ message: "Already in wishlist" });
+    app.patch("/cart/:id", verifyToken, async (req, res) => {
+      const { quantity } = req.body;
+      const result = await carts.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: { quantity: parseInt(quantity) } }
+      );
+      res.send(result);
+    });
 
-    await wishlist.insertOne(item);
-    res.send({ success: true });
-  });
+    app.delete("/cart/:id", verifyToken, async (req, res) => {
+      const result = await carts.deleteOne({ _id: new ObjectId(req.params.id) });
+      res.send(result);
+    });
 
-  app.get("/wishlist", verifyToken, async (req, res) => {
-    const result = await wishlist.find({ email: req.user.email }).toArray();
-    res.send(result);
-  });
+    // Wishlist (Same Logic)
+    app.post("/wishlist", verifyToken, async (req, res) => {
+      const item = req.body;
+      const exists = await wishlist.findOne({ email: req.user.email, productId: item.productId });
+      if (exists) return res.status(400).send({ message: "Already in wishlist" });
+      
+      item.email = req.user.email;
+      const result = await wishlist.insertOne(item);
+      res.send(result);
+    });
 
-  app.delete("/wishlist/:id", verifyToken, async (req, res) => {
-    const result = await wishlist.deleteOne({ _id: new ObjectId(req.params.id) });
-    res.send(result);
-  });
+    app.get("/wishlist", verifyToken, async (req, res) => {
+      const result = await wishlist.find({ email: req.user.email }).toArray();
+      res.send(result);
+    });
 
+    app.delete("/wishlist/:id", verifyToken, async (req, res) => {
+      const result = await wishlist.deleteOne({ _id: new ObjectId(req.params.id) });
+      res.send(result);
+    });
 
-    // -------------------- ORDERS --------------------
-  app.post("/order", verifyToken, async (req, res) => {
-    const order = req.body;
-    order.email = req.user.email;
-    order.createdAt = new Date();
-    order.status = "pending";
+    // -------------------- ORDERS & STATS --------------------
+    app.post("/order", verifyToken, async (req, res) => {
+      const order = req.body;
+      order.email = req.user.email;
+      order.createdAt = new Date();
+      order.status = "pending";
 
-    const result = await orders.insertOne(order);
-    res.send(result);
-  });
+      const result = await orders.insertOne(order);
+      
+      // Clear Cart & Update Stock
+      await carts.deleteMany({ email: req.user.email });
+      if (order.products) {
+        for (const item of order.products) {
+          await products.updateOne(
+            { _id: new ObjectId(item.productId) },
+            { $inc: { stock: -item.quantity } }
+          );
+        }
+      }
+      res.send(result);
+    });
 
-  app.get("/orders", verifyToken, async (req, res) => {
-    const result = await orders.find({ email: req.user.email }).toArray();
-    res.send(result);
-  });
+    app.get("/orders", verifyToken, async (req, res) => {
+      const result = await orders.find({ email: req.user.email }).sort({ createdAt: -1 }).toArray();
+      res.send(result);
+    });
 
+    app.get("/admin/orders", verifyToken, verifyAdmin, async (req, res) => {
+      const result = await orders.find().sort({ createdAt: -1 }).toArray();
+      res.send(result);
+    });
+
+    app.patch("/admin/orders/:id", verifyToken, verifyAdmin, async (req, res) => {
+        const { status } = req.body;
+        const result = await orders.updateOne(
+            { _id: new ObjectId(req.params.id) },
+            { $set: { status } }
+        );
+        res.send(result);
+    });
+
+    app.get("/admin/stats", verifyToken, verifyAdmin, async (req, res) => {
+      const totalUsers = await users.estimatedDocumentCount();
+      const totalProducts = await products.estimatedDocumentCount();
+      const totalOrders = await orders.estimatedDocumentCount();
+      const payments = await orders.aggregate([{ $group: { _id: null, totalRevenue: { $sum: "$totalAmount" } } }]).toArray();
+      const revenue = payments.length > 0 ? payments[0].totalRevenue : 0;
+      res.send({ totalUsers, totalProducts, totalOrders, revenue });
+    });
 
     // -------------------- ROOT --------------------
     app.get("/", (req, res) => {
-      res.send("Z-TECH Backend Running...");
+      res.send("Z-TECH Server is Running");
     });
 
-    
-
-    // -------------------- START SERVER --------------------
-    app.listen(PORT, () =>
-      console.log(`Z-TECH server running on port ${PORT}`)
-    );
-
-  } catch (err) {
-    console.error("Failed to start server:", err);
-    process.exit(1);
+  } catch (error) {
+    console.error(error);
   }
 }
 
-start();
+run().catch(console.dir);
+
+// -------------------- FOR VERCEL DEPLOYMENT --------------------
+// Vercel serverless function এর জন্য app এক্সপোর্ট করতে হয়
+module.exports = app;
+
+// লোকাল ডেভেলপমেন্টের জন্য
+if (process.env.NODE_ENV !== "production") {
+    app.listen(PORT, () => {
+        console.log(`Server is running on port ${PORT}`);
+    });
+}
