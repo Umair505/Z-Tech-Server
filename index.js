@@ -282,6 +282,13 @@ async function run() {
       res.send(result);
     });
 
+     app.get("/admin/orders/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await orders.findOne(query);
+      res.send(result);
+    });
+
     app.patch("/admin/orders/:id", verifyToken, verifyAdmin, async (req, res) => {
         const { status } = req.body;
         const result = await orders.updateOne(
